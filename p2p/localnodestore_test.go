@@ -55,5 +55,4 @@ func TestNodeLocalStore(t *testing.T) {
 	// cleanup
 	filesystem.DeleteSpacemeshDataFolders(t)
 
-
 }

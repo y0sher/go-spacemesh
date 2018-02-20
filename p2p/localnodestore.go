@@ -55,6 +55,8 @@ func getDataFilePath(nodeID string) (string, error) {
 // Persist node's data to local store.
 func (n *localNodeImp) persistData() error {
 
+	n.Info("Persisting node")
+
 	data := &NodeData{
 		PubKey:  n.pubKey.String(),
 		PrivKey: n.privKey.String(),

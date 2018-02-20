@@ -13,4 +13,6 @@ jobs:
               - go get -u github.com/golang/lint/golint
               - ./ci/validate-lint.sh
         - stage: test
-          script: go test github.com/spacemeshos/go-spacemesh/...
+          script:
+              - sudo apt-get install -y build-essential
+              - make test

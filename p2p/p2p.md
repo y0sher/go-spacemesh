@@ -1,26 +1,90 @@
 # P2P Design
 
-`p2p` package should expose minimal functions as a service to other components in Spacemesh.
-- `SendMessage(MSG, nodeID)`
-- `Broadcast(MSG)`
+ *TODO*: Add dependency structure
+
+## Package `p2p`
+
+*TODO*: Expose these out of the `p2p` package and set `init()` to create a node for that.
+
+`p2p` package exposes minimal functions as a service to other components in Spacemesh.
+- `SendMessage(req, nodeID)`
+
+   sends a direct P2P message to a specific nodeID. reports error to callback included in `req`
+- `Broadcast(req)`
+
+   Disseminates a msg(`req`) to the node's neighbors and starting a gossip protocol
 - `OnRecv(msgtype, optional:peer, callback(func or chan))`  / `RegisterProtocol(Protocol, handler)`
+
+  Register a protocol that should handle incoming messages from this protocol type.
+
+  *NOTE*: Every protocol is a single implementation that is in charge of managing it's own state for all instances.
+
 
 ## Node
 
-The `LocalNode` is the struct that represent a node in our network. in order to use the above P2P functionality a `LocalNode` must be created from within the `p2p` package.
-It holds a Private and Public key and an Identity
-`LocalNode` can initialize from scratch or form existing persistent keys and files. it needs a local address and port.
+Every node representation exposes basic information methods :
+- `ID()` - byte array of the node's public key
+- `DhtID()` - A `dht.ID` created from the node's ID
+- `String()` - An hex-encoded string representation of the node ID. Implements go's `Stringer` interface.
+- `Address()` - An IP address (*TODO*: uniform this, some places say `TCPAddress`, some `IP`)
+*TODO*: Create a base Node interface or struct service that holds these methods.
 
-To enable this it implements multiple components:
+The `LocalNode` is the struct that represent a our identity in the network. in order to use the above P2P functionality a `LocalNode` must be created from within the `p2p` package.
+It holds a Private and Public key as an Identity
+`LocalNode` can initialize from scratch or from existing persistent keys and files. it needs a local address and port.
+
+#### `LocalNode` exposed API
+- `PublicKey()` - The node's public key as `crypto.PublicKey`
+- `PrivateKey()` - The node's Private Key used for signing.-
+-  `Shutdown()` - Shutsdown all node services
+- `GetLogger`, `Info()`, `Debug()`... - logging capabilities.
+
+***TODO***: take this out of `LocalNode`
+-  `NewProtocolMessageMetadata(proto, reqid, gossip)` - Creates metadata for a message, Should be part of constructing messages
+
+-  `EnsureNodeDataDirectory()` - Checks that a node directory exists. Should be in `filesystem`
+-  `persistData()` - Saves the node's data to the filesystem. Should be in filesystem
+
+- `GetRemoteNodeData()` - Returns a remote node data struct from a local node. Should be in `RemoteNodeData`
+
 
 ## Swarm
 `Swarm` manages the communications with peers while maintaining a list of healthy connected peers and an updated `RoutingTable` of nodes to choose from.
-`Swarm`'s responsibility is to receive and send network messages and connections using events propagated from `Net`, handle them - check that they are in a valid format and time and pass them over to the right protocol handler using `Demuxer`.
+`Swarm`' is managing opening connections and handling incoming connections, assigning them to peers, and the communication with them. using events propagated from `Net`, it determines the right connection and format the message for sending. checking that incoming messages are in a valid format and time and pass them over to the right protocol handler using `Demuxer`.
 
 *TODO*: Describe the patterns used in `Swarm` the event loop, state management and how to prevent deadlocks.
 Also about the bootstrap loop and the network loop.
 
-### P2P Protocols :
+
+## `Swarm`s external methods
+
+- `SendMessage(req SendMessageReq)` - Sends message to a specific node ID without knowing its ip address.
+    req.msg should be marshaled protocol message. e.g. something like pb.PingReqData                              This is designed for standard messages that require a session. This method is designed to be used by protocols implementations to send message to any destination.
+- `RegisterNode(node)` - Register a node in the swarm based on ip and address
+
+- `ConnectTo(req node, done)` - Attempt to establish connection and session with known node. reports to done channel when done
+- `Disconnect()` - Initiates a disconnection from a node
+
+- `BlockUntilBoot()` - Returns a channel that blocks until bootstrap is down.
+
+- `SendHandshakeMessage(req)` - Send handshake message that is used to establish a session.
+
+- `RegisterNodeEventsCallback(callback)` - Register a channel that'll get notified on remote nodes state changes
+
+- `Shutdown()` - Shuts the `Swarm` down.
+
+
+***TODO*** : Replace usages of the following by wrapper functions inside `Swarm`
+
+- `GetLocalNode()` - Used to use `LocalNode` features from `Swarm`
+- `GetDemuxer()` - Used to register to demuxer from protocols or swarm.
+- `getRoutingTable()` - Used to update `RoutingTable` from protocols.
+
+
+- `getHandshakeProtocol()`,
+- `getFindNodeProtocol()`  - Internal protocols used by the `p2p` stack.
+
+### Internal P2P Protocols :
   - `HandshakeProtocol` - Used to initiate a secured connection with peers
   ```protobuf
   // The initiator creates a HandshakeData object
@@ -43,6 +107,7 @@ Also about the bootstrap loop and the network loop.
       string sign = 12; // hex encoded string 32 bytes sign of all above data by node public key (verifies he has the priv key and he wrote the data
   }
   ```
+  *NOTE*: The handshake response message is in the same format.
   - `FindNodeProtocol`  - The only `Kademlia` protocol we implement, used for bootstrapping, discovery and probing of nodes.
 ```protobuf
 // FindNode is a Kademlia operation where the initiator sends a dht.ID
@@ -72,6 +137,7 @@ message FindNodeResp {
 
   ### Protocols
   All protocols include `Metadata` about the author or sender of the message.
+  Every message is attached with`Metadata` before its sent.
 
 ```protobuf
 message Metadata {

@@ -22,7 +22,7 @@
 
 ## Node
 
-Every node representation exposes basic information methods :
+Every node representation exposes basic information methods that are derived from `BaseNode` :
 - `ID()` - byte array of the node's public key
 - `DhtID()` - A `dht.ID` created from the node's ID
 - `String()` - An hex-encoded string representation of the node ID. Implements go's `Stringer` interface.
@@ -32,18 +32,29 @@ Every node representation exposes basic information methods :
 The `LocalNode` is the struct that represent a our identity in the network. in order to use the above P2P functionality a `LocalNode` must be created from within the `p2p` package.
 It holds a Private and Public key as an Identity
 `LocalNode` can initialize from scratch or from existing persistent keys and files. it needs a local address and port.
+`PublicKey` is the node's identifier 
+
+### `LocalNode` dependencies
+ 
+   - `crypto` - Importing the structure for the keys
+   - `filesystem` - Used for persisting the node's info to files
+   - `log` - to create a dedicated log for `LocalNode`
+   - `dht` - the `dht.ID` methods.
+
 
 #### `LocalNode` exposed API
-- `PublicKey()` - The node's public key as `crypto.PublicKey`
-- `PrivateKey()` - The node's Private Key used for signing.-
--  `Shutdown()` - Shutsdown all node services
-- `GetLogger`, `Info()`, `Debug()`... - logging capabilities.
 
-***TODO***: take this out of `LocalNode`
+- `BaseNode` Methods.
+- `PublicKey()` - The node's public key as `crypto.PublicKey` also used as the node's identity in the network.
+- `PrivateKey()` - The node's Private Key used for signing.
+-  `persistData()` - Saves the node's data to the filesystem. Should be in filesystem
+-  `Shutdown()` - Shutsdown all node services
+* `LocalNode` is loggable (*TODO* - Write short doc about `log` in Spacemesh)
+
+***TODO***: take these out of `LocalNode`
 -  `NewProtocolMessageMetadata(proto, reqid, gossip)` - Creates metadata for a message, Should be part of constructing messages
 
 -  `EnsureNodeDataDirectory()` - Checks that a node directory exists. Should be in `filesystem`
--  `persistData()` - Saves the node's data to the filesystem. Should be in filesystem
 
 - `GetRemoteNodeData()` - Returns a remote node data struct from a local node. Should be in `RemoteNodeData`
 
@@ -55,34 +66,42 @@ It holds a Private and Public key as an Identity
 *TODO*: Describe the patterns used in `Swarm` the event loop, state management and how to prevent deadlocks.
 Also about the bootstrap loop and the network loop.
 
+### `Swarm` dependencies
+ 
+   - `crypto` - Importing the structure for the keys
+   - `filesystem` - Used for persisting the node's info to files
+   - `log` - to create a dedicated log for `LocalNode`
+   - `dht` - the `dht.ID` methods.
 
-## `Swarm`s external methods
+## `Swarm`'s exposed API
 
-- `SendMessage(req SendMessageReq)` - Sends message to a specific node ID without knowing its ip address.
-    req.msg should be marshaled protocol message. e.g. something like pb.PingReqData                              This is designed for standard messages that require a session. This method is designed to be used by protocols implementations to send message to any destination.
-- `RegisterNode(node)` - Register a node in the swarm based on ip and address
+- `SendMessage(req)` - Sends message to a specific node ID without knowing its ip address.
+- `SendHandshakeMessage(req)` - Send handshake message that is used to establish a session. assumes we already know it.
 
-- `ConnectTo(req node, done)` - Attempt to establish connection and session with known node. reports to done channel when done
-- `Disconnect()` - Initiates a disconnection from a node
+    `SendMessageRequest` includes the protocol name, the message payload. and a callback to report when a message is sent or not (on error).
 
-- `BlockUntilBoot()` - Returns a channel that blocks until bootstrap is down.
+- `ConnectTo(node, done)` - Attempt to establish connection and session with known node. reports to a channel is done.
+- `Disconnect(node)` - Disconnects from node.
 
-- `SendHandshakeMessage(req)` - Send handshake message that is used to establish a session.
+    Both Used mainly for testing.
 
-- `RegisterNodeEventsCallback(callback)` - Register a channel that'll get notified on remote nodes state changes
+- `BlockUntilBoot()` - Returns a channel that blocks until bootstrap is done.
+
+- `RegisterNodeEventsCallback(callback)` - Register a channel that'll get notified on remote nodes state changes.
 
 - `Shutdown()` - Shuts the `Swarm` down.
 
+- `getHandshakeProtocol()`,
+- `getFindNodeProtocol()`  - Internal protocols used by `Swarm`.
 
-***TODO*** : Replace usages of the following by wrapper functions inside `Swarm`
+* `Swarm` is loggable and gets it log object from the `LocalNode` holds.
+
+***TODO*** : Replace usages of the following by wrapper functions inside `Swarm`.
 
 - `GetLocalNode()` - Used to use `LocalNode` features from `Swarm`
 - `GetDemuxer()` - Used to register to demuxer from protocols or swarm.
 - `getRoutingTable()` - Used to update `RoutingTable` from protocols.
 
-
-- `getHandshakeProtocol()`,
-- `getFindNodeProtocol()`  - Internal protocols used by the `p2p` stack.
 
 ### Internal P2P Protocols :
   - `HandshakeProtocol` - Used to initiate a secured connection with peers
@@ -136,8 +155,9 @@ message FindNodeResp {
 
 
   ### Protocols
-  All protocols include `Metadata` about the author or sender of the message.
-  Every message is attached with`Metadata` before its sent.
+  Every protocol implementation creates its own binary marshalled protocol payload and sends it to swarm.
+  
+  All messages are wrapped to include `Metadata` about the author or sender of the message, signed with the node's `PrivateKey` and sent.
 
 ```protobuf
 message Metadata {
@@ -156,22 +176,21 @@ message Metadata {
   ```protobuf
   // ping is our example protocol
   message PingReqData {
-      Metadata metadata = 1;
-      string ping = 2; // the echo message itself - protocol specific - starts at #2
+      string ping = 1; // the echo message itself - protocol specific - starts at #2
   }
 
   message PingRespData {
-      Metadata metadata = 1;
-      string pong = 2; // the echo message itself - protocol specific - starts at #2
+      string pong = 1; // the echo message itself - protocol specific - starts at #2
   }
   ```
 
+ *TODO*: Create the new protocol flow which make signing and adding `Metadata` happen in `Swarm` which will let the protocol payload to be structure agnostic.
   *TODO*: describe our process of reading protocol messages metadata for validation without reading the protocol payload
 
 
 ## Components used by `Swarm`
 
-## `net` Packge -  `Net` and `Connection` (with `delimited`)
+## `net` Package -  `Net` and `Connection` (with `delimited`)
   `Net` is basically a connection manager. it is used to initiate and to accept all network operations including connections and messages.
 
   `Net` exposes `DialTCP(ip, timeout, keepalive)` (** to be `Dial` to enable more transport flexibility **)  which `Swarm` uses to initiate connections.
@@ -182,8 +201,8 @@ message Metadata {
 
 `Net` holds channels that are used to pass messages and connections through to `Swarm` to handle them. they are exposed by the following methods :
 
-- 	`GetNewConnections()` - A channel of connections
--	`GetClosingConnections()` - A channel of connections
+- 	`GetNewConnections()` - A channel of incoming new connections of type `Connection`.
+-	`GetClosingConnections()` - A channel of connections that are closing.
 -	`GetConnectionErrors()` - A channel of `ConnectionError`
 -	`GetIncomingMessage()` - A channel of `IncomingMessage`s
 -	`GetMessageSendErrors()` A channel of `MessageSendError`
@@ -274,7 +293,7 @@ Our routing table operations implement the `Kademlia` protocol operations
 - `NearestPeers(dht.ID)` - We check in the appropriate routing table and return the closest peers that we have to this node.
 - `FindPeer(dht.ID)` - return the contact information of this peer if we have it and null if we don't.
 
-## Bootstrapping
+### Bootstrapping
 
 The bootstrap process is what lets us join the p2p network.
 
@@ -284,3 +303,10 @@ To bootstrapping process is just a matter of issuing the `FindNode` `Kademlia` p
 nodes (Concurrently) for the same ID until we don't get new results and we queried all nodes.
 
 This will make every node that see our request to update its `RoutingTable` with our node's `dht.ID` and also fill our `dht.ID` with these nodes.
+
+
+## `timesync` package
+
+`timesync` is a package that handles all time synchronization of the node. it is used to check that the node is sync against multiple [`NTP`](https://en.wikipedia.org/wiki/Network_Time_Protocol) servers.
+if our node is too much out of sync it won't start and request to calibrate the OS clock against `NTP`.
+Whenever we receive a message we use `timesync` to check if its not too much back or forth in time to accept. this limit is determined by a configurable value (*TODO*: make it configurable) in the node `MaxAllowedMessageDrift`.   

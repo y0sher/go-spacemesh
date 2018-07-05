@@ -1,8 +1,8 @@
-// Package dht implements a Distributed Hash Table based on Kademlia
+// Package dht implements a Distributed Hash Table based on Kademlia protocol.
 package dht
 
 import (
-	"github.com/spacemeshos/go-spacemesh/p2p/identity"
+	"github.com/spacemeshos/go-spacemesh/p2p/node"
 	"github.com/spacemeshos/go-spacemesh/p2p/nodeconfig"
 
 	"github.com/pkg/errors"
@@ -10,28 +10,34 @@ import (
 	"time"
 )
 
+// LookupTimeout is the timelimit we give to a single lookup operation
 const LookupTimeout = 5 * time.Second
 
 var (
-	ErrLookupFailed      = errors.New("failed to find node in the network")
+	// ErrLookupFailed determines that we could'nt find this node in the routing table or network
+	ErrLookupFailed = errors.New("failed to find node in the network")
+	// ErrEmptyRoutingTable means that our routing table is empty thus we can't find any node (so we can't query any)
 	ErrEmptyRoutingTable = errors.New("no nodes to query - routing table is empty")
 )
 
+// Message is an interface to represent a simple message structure
 type Message interface {
-	Sender() identity.Node
+	Sender() node.Node
 	Data() []byte
 }
 
+// Service is an interface that represents a networking service (ideally p2p) that we can use to send messages or listen to incoming messages
 type Service interface {
 	RegisterProtocol(protocol string) chan Message
 	SendMessage(target crypto.PublicKey, msg []byte)
 }
 
-
+// DHT represents the Distributed Hash Table, it holds the Routing Table local node cache. and a FindNode kademlia protocol.
+// DHT Is created with a LocalNode identity as base. (DhtID)
 type DHT struct {
 	config nodeconfig.SwarmConfig
 
-	local *identity.LocalNode
+	local *node.LocalNode
 
 	rt  RoutingTable
 	fnp *findNodeProtocol
@@ -40,7 +46,7 @@ type DHT struct {
 }
 
 // New creates a new dht
-func New(node *identity.LocalNode, config nodeconfig.SwarmConfig, service Service) *DHT {
+func New(node *node.LocalNode, config nodeconfig.SwarmConfig, service Service) *DHT {
 	d := &DHT{
 		config:  config,
 		local:   node,
@@ -52,19 +58,19 @@ func New(node *identity.LocalNode, config nodeconfig.SwarmConfig, service Servic
 }
 
 // Update insert or update a node in the routing table.
-func (d *DHT) Update(node identity.Node) {
+func (d *DHT) Update(node node.Node) {
 	d.rt.Update(node)
 }
 
 // Lookup finds a node in the dht by its public key, it issues a search inside the local routing table,
 // if the node can't be found there it sends a query to the network.
-func (d *DHT) Lookup(id crypto.PublicKey) (identity.Node, error) {
-	dhtid := identity.NewDhtID(id.Bytes())
+func (d *DHT) Lookup(id crypto.PublicKey) (node.Node, error) {
+	dhtid := node.NewDhtID(id.Bytes())
 	poc := make(PeersOpChannel)
 	d.rt.NearestPeers(NearestPeersReq{dhtid, d.config.RoutingTableAlpha, poc})
 	res := (<-poc).Peers
 	if len(res) == 0 {
-		return identity.EmptyNode, ErrEmptyRoutingTable
+		return node.EmptyNode, ErrEmptyRoutingTable
 	}
 
 	if res[0].DhtID().Equals(dhtid) {
@@ -79,7 +85,7 @@ func (d *DHT) Lookup(id crypto.PublicKey) (identity.Node, error) {
 // nodeId: - base58 node id string
 // Returns requested node via the callback or nil if not found
 // Also used as a bootstrap function to populate the routing table with the results.
-func (d *DHT) kadLookup(id crypto.PublicKey, searchList []identity.Node) (identity.Node, error) {
+func (d *DHT) kadLookup(id crypto.PublicKey, searchList []node.Node) (node.Node, error) {
 	// save queried node ids for the operation
 	queried := map[string]struct{}{}
 
@@ -104,7 +110,7 @@ func (d *DHT) kadLookup(id crypto.PublicKey, searchList []identity.Node) (identi
 		if len(servers) == 0 {
 			// no more servers to query
 			// target node was not found.
-			return identity.EmptyNode, ErrLookupFailed
+			return node.EmptyNode, ErrLookupFailed
 		}
 
 		// lookup nodeId using the target servers
@@ -112,18 +118,18 @@ func (d *DHT) kadLookup(id crypto.PublicKey, searchList []identity.Node) (identi
 		if len(res) > 0 {
 
 			// merge newly found nodes
-			searchList = identity.Union(searchList, res)
+			searchList = node.Union(searchList, res)
 			// sort by distance from target
-			searchList = identity.SortByDhtID(res, identity.NewDhtID(id.Bytes()))
+			searchList = node.SortByDhtID(res, node.NewDhtID(id.Bytes()))
 		}
 		// keep iterating using new servers that were not queried yet from searchlist (if any)
 	}
 
-	return identity.EmptyNode, ErrLookupFailed
+	return node.EmptyNode, ErrLookupFailed
 }
 
-// FilterFindNodeServers picks up to count server who haven't been queried recently.
-func filterFindNodeServers(nodes []identity.Node, queried map[string]struct{}, alpha int) []identity.Node {
+// filterFindNodeServers picks up to count server who haven't been queried recently.
+func filterFindNodeServers(nodes []node.Node, queried map[string]struct{}, alpha int) []node.Node {
 
 	// If no server have been queried already, just make sure the list len is alpha
 	if len(queried) == 0 {
@@ -148,18 +154,18 @@ func filterFindNodeServers(nodes []identity.Node, queried map[string]struct{}, a
 	return nodes[:i]
 }
 
-//// Lookup a target node on one or more servers
-// Returns closest nodes which are closers than closestNode to targetId
-// If node found it will be in top of results list
-func (d *DHT) findNodeOp(servers []identity.Node, queried map[string]struct{}, id crypto.PublicKey, closestNode identity.Node) []identity.Node {
+// findNodeOp a target node on one or more servers
+// returns closest nodes which are closers than closestNode to targetId
+// if node found it will be in top of results list
+func (d *DHT) findNodeOp(servers []node.Node, queried map[string]struct{}, id crypto.PublicKey, closestNode node.Node) []node.Node {
 	l := len(servers)
 
 	if l == 0 {
-		return []identity.Node{}
+		return []node.Node{}
 	}
 
 	// results channel
-	results := make(chan []identity.Node)
+	results := make(chan []node.Node)
 
 	// Issue a parallel FindNode op to all servers on the list
 	for i := 0; i < l; i++ {
@@ -176,20 +182,28 @@ func (d *DHT) findNodeOp(servers []identity.Node, queried map[string]struct{}, i
 		}(i)
 	}
 
-	done := 0
-	idSet := make(map[string]identity.Node)
+	done := 0                          // To know when all operations finished
+	idSet := make(map[string]struct{}) // to remove duplicates
+
+	out := make([]node.Node, 0) // the end result we collect
+
 	timeout := time.NewTimer(LookupTimeout)
 Loop:
 	for {
 		select {
 		case res := <-results:
-			for i := 0; i < len(res); i++ {
-				if _, ok := idSet[res[i].PublicKey().String()]; ok {
+
+			for _, n := range res {
+
+				if _, ok := idSet[n.PublicKey().String()]; ok {
 					continue
 				}
-				idSet[res[i].PublicKey().String()] = res[i]
-				d.rt.Update(res[i])
+				idSet[n.PublicKey().String()] = struct{}{}
+
+				d.rt.Update(n)
+				out = append(out, n)
 			}
+
 			done++
 			if done == l {
 				close(results)
@@ -197,18 +211,10 @@ Loop:
 			}
 		case <-timeout.C:
 			// we expected nodes to return results within a reasonable time frame
+			// we return what we have now.
 			break Loop
 		}
 	}
 
-	// add unique node ids that are closer to target id than closest node
-	res := make([]identity.Node, len(idSet))
-	i := 0
-	for _, n := range idSet {
-		res[i] = n
-		i++
-	}
-
-	// sort results by distance from target dht id
-	return res
+	return out
 }
